@@ -130,6 +130,7 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 
 @synthesize delegate;
 @synthesize type;
+@synthesize databaseType;
 @synthesize name;
 @synthesize host;
 @synthesize user;
@@ -331,8 +332,13 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
         return;
     }
 
-    // ...or start the MySQL connection process directly
-    [self performSelector:@selector(initiateMySQLConnection) withObject:nil afterDelay:0.0];
+    // Start the appropriate connection process based on type
+    if ([self databaseType] == 1) { // PostgreSQL
+        [self performSelector:@selector(initiatePostgreSQLConnection) withObject:nil afterDelay:0.0];
+    } else {
+        // Default to MySQL for existing connection types (TCP/IP, Socket)
+        [self performSelector:@selector(initiateMySQLConnection) withObject:nil afterDelay:0.0];
+    }
 }
 
 /**
@@ -353,6 +359,12 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
         [NSThread detachNewThreadWithName:SPCtxt(@"SPConnectionController cancellation background disconnect",dbDocument) target:mySQLConnection selector:@selector(disconnect) object:nil];
     }
 
+    // Cancel the PostgreSQL connection - handing it off to a background thread - if one is present
+    if (postgreSQLConnection) {
+        [postgreSQLConnection setDelegate:nil];
+        [NSThread detachNewThreadWithName:SPCtxt(@"SPConnectionController PostgreSQL cancellation background disconnect",dbDocument) target:postgreSQLConnection selector:@selector(disconnect) object:nil];
+    }
+
     // Cancel the SSH tunnel if present
     if (sshTunnel) {
         [sshTunnel disconnect];
@@ -363,6 +375,9 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 }
 
 - (BOOL)isConnectedViaSSL {
+    if ([self databaseType] == 1) { // PostgreSQL
+        return [postgreSQLConnection isConnectedViaSSL];
+    }
     return [mySQLConnection isConnectedViaSSL];
 }
 
@@ -2370,6 +2385,141 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 }
 
 /**
+ * Set up the PostgreSQL connection in the background.
+ */
+- (void)initiatePostgreSQLConnection
+{
+    if (isTestingConnection) {
+        if (sshTunnel) {
+            [progressIndicatorText setStringValue:NSLocalizedString(@"Testing PostgreSQL...", @"PostgreSQL connection test very short status message")];
+        }
+        else {
+            [progressIndicatorText setStringValue:NSLocalizedString(@"Testing connection...", @"Connection test very short status message")];
+        }
+    }
+    else if (sshTunnel) {
+        [progressIndicatorText setStringValue:NSLocalizedString(@"PostgreSQL connecting...", @"PostgreSQL connecting very short status message")];
+    }
+    else {
+        [progressIndicatorText setStringValue:NSLocalizedString(@"Connecting...", @"Generic connecting very short status message")];
+    }
+
+    [progressIndicatorText display];
+
+    [connectButton setTitle:NSLocalizedString(@"Cancel", @"cancel button")];
+    [connectButton setAction:@selector(cancelConnection:)];
+    [connectButton setEnabled:YES];
+    [connectButton display];
+
+    [NSThread detachNewThreadWithName:SPCtxt(@"SPConnectionController PostgreSQL connection task", dbDocument)
+                               target:self
+                             selector:@selector(initiatePostgreSQLConnectionInBackground)
+                               object:nil];
+}
+
+/**
+ * Initiates the core of the PostgreSQL connection process on a background thread.
+ */
+- (void)initiatePostgreSQLConnectionInBackground
+{
+    @autoreleasepool {
+        postgreSQLConnection = [[SPPostgreSQLConnection alloc] init];
+
+        // Set up shared details
+        [postgreSQLConnection setDelegate:self];
+        [postgreSQLConnection setHost:[self host]];
+        [postgreSQLConnection setUsername:[self user]];
+        [postgreSQLConnection setPassword:[self keychainPassword]];
+        [postgreSQLConnection setPort:[self port]];
+        [postgreSQLConnection setUseSSL:[self useSSL]];
+
+        // Set SSL details if appropriate
+        if ([self useSSL]) {
+            [postgreSQLConnection setSslKeyFilePath:[self sslKeyFileLocation]];
+            [postgreSQLConnection setSslCertificatePath:[self sslCertificateFileLocation]];
+            [postgreSQLConnection setSslCACertificatePath:[self sslCACertFileLocation]];
+        }
+
+        // Set the connection timeout
+        [postgreSQLConnection setTimeout:[[prefs objectForKey:SPConnectionTimeoutValue] integerValue]];
+
+        // Set the database if specified
+        if ([[self database] length]) {
+            [postgreSQLConnection setDatabase:[self database]];
+        }
+
+        // Initiate the connection
+        if (![postgreSQLConnection connect]) {
+            if (cancellingConnection) {
+                [postgreSQLConnection disconnect];
+                postgreSQLConnection = nil;
+                return;
+            }
+
+            // Connection failed
+            [[self onMainThread] failConnectionWithTitle:NSLocalizedString(@"Unable to connect to host", @"connection failed title")
+                                            errorMessage:[postgreSQLConnection queryErrorMessage] ?: NSLocalizedString(@"An unknown error occurred", @"unknown error message")
+                                                  detail:nil];
+            [postgreSQLConnection disconnect];
+            postgreSQLConnection = nil;
+            return;
+        }
+
+        // Successfully connected
+        [self performSelectorOnMainThread:@selector(postgreSQLConnectionEstablished) withObject:nil waitUntilDone:NO];
+    }
+}
+
+/**
+ * Called on the main thread once the PostgreSQL connection is established on the background thread.
+ */
+- (void)postgreSQLConnectionEstablished
+{
+    SPLog(@"postgreSQLConnectionEstablished");
+    isConnecting = NO;
+
+    // If the user is only testing the connection, kill the connection
+    // once established and reset the UI.  Also catch connection cancels.
+    if (isTestingConnection || cancellingConnection) {
+
+        // Clean up any connections remaining, and reset the UI
+        [self cancelConnection:self];
+
+        if (isTestingConnection) {
+            [self _showConnectionTestResult:NSLocalizedString(@"Connection succeeded", @"Connection success very short status message")];
+        }
+
+        return;
+    }
+
+    [progressIndicatorText setStringValue:NSLocalizedString(@"Connected", @"connection established message")];
+    [progressIndicatorText display];
+
+    // Stop the current tab's progress indicator
+    [dbDocument setIsProcessing:NO];
+
+    // Successful connection!
+    [connectButton setEnabled:NO];
+    [connectButton display];
+    [progressIndicator stopAnimation:self];
+    [progressIndicatorText setHidden:YES];
+
+    // Check SSL status if appropriate
+    if (useSSL) {
+        if (![postgreSQLConnection isConnectedViaSSL]) {
+            [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"SSL connection not established", @"SSL requested but not used title") message:NSLocalizedString(@"You requested that the connection should be established using SSL, but PostgreSQL made the connection without SSL.\n\nThis may be because the server does not support SSL connections, or has SSL disabled; or insufficient details were supplied to establish an SSL connection.\n\nThis connection is not encrypted.", @"SSL connection requested but not established error detail") callback:nil];
+        }
+    }
+
+    // Re-enable favorites table view
+    [favoritesOutlineView setEnabled:YES];
+    [favoritesOutlineView display];
+
+    // Pass the connection to the document and clean up the interface
+    [self addConnectionToDocument];
+}
+
+/**
  * A callback function for the SSH Tunnel setup process - will be called on a connection
  * state change, allowing connection to fail or proceed as appropriate.  If successful,
  * will call initiateMySQLConnection.
@@ -2423,7 +2573,11 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 
     // Pass the connection to the table document, allowing it to set
     // up the other classes and the rest of the interface.
-    [dbDocument setConnection:mySQLConnection];
+    if ([self databaseType] == 1) { // PostgreSQL
+        [dbDocument setConnection:postgreSQLConnection];
+    } else {
+        [dbDocument setConnection:mySQLConnection];
+    }
 }
 
 /**
@@ -3240,6 +3394,8 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
         isTestingConnection = NO;
         sshTunnel = nil;
         mySQLConnection = nil;
+        postgreSQLConnection = nil;
+        databaseType = 0; // Default to MySQL
         cancellingConnection = NO;
         favoriteNameFieldWasAutogenerated = NO;
         allowSplitViewResizing = NO;
@@ -3740,6 +3896,26 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
     if (error) {
         [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Favorites export error", @"favorites export error message") message:[NSString stringWithFormat:NSLocalizedString(@"The following error occurred during the export process:\n\n%@", @"favorites export error informative message"), [error localizedDescription]] callback:nil];
     }
+}
+
+#pragma mark - SPPostgreSQLConnectionDelegate
+
+- (void)willQueryString:(NSString *)query connection:(SPPostgreSQLConnection *)connection
+{
+    // PostgreSQL connection delegate method - can be used for query logging
+    SPLog(@"PostgreSQL will execute query: %@", query);
+}
+
+- (void)connectionLost:(SPPostgreSQLConnection *)connection
+{
+    // Handle PostgreSQL connection loss
+    SPLog(@"PostgreSQL connection lost");
+}
+
+- (BOOL)connectionShouldReconnect:(SPPostgreSQLConnection *)connection
+{
+    // For now, always allow reconnection attempts
+    return YES;
 }
 
 // Add this method to handle font change notifications

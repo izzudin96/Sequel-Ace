@@ -34,6 +34,7 @@
 #import "SPReachability.h"
 
 #import <SPMySQL/SPMySQL.h>
+#import "SPPostgreSQL.h"
 
 @class SPDatabaseDocument, 
 	   SPFavoritesController, 
@@ -41,6 +42,7 @@
 	   SPTreeNode,
 	   SPFavoritesOutlineView,
        SPMySQLConnection,
+       SPPostgreSQLConnection,
 	   SPSplitView,
 	   SPKeychain,
 	   SPFavoriteNode,
@@ -54,10 +56,11 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
     SPConnectionTimeZoneModeUseFixedTZ
 };
 
-@interface SPConnectionController : NSViewController <SPMySQLConnectionDelegate, NSOpenSavePanelDelegate, SPFavoritesImportProtocol, SPFavoritesExportProtocol, NSSplitViewDelegate>
+@interface SPConnectionController : NSViewController <SPMySQLConnectionDelegate, SPPostgreSQLConnectionDelegate, NSOpenSavePanelDelegate, SPFavoritesImportProtocol, SPFavoritesExportProtocol, NSSplitViewDelegate>
 {	
 	__weak SPDatabaseDocument *dbDocument;
 	SPMySQLConnection *mySQLConnection;
+	SPPostgreSQLConnection *postgreSQLConnection;
 
 	SPKeychain *keychain;
 	NSSplitView *databaseConnectionView;
@@ -73,6 +76,7 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
 	// Standard details
 	NSInteger previousType;
 	NSInteger type;
+	NSInteger databaseType; // 0 = MySQL, 1 = PostgreSQL
 	NSString *name;
 	NSString *host;
 	NSString *user;
@@ -201,6 +205,7 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
 
 @property (readwrite, weak) id <SPConnectionControllerDelegateProtocol> delegate;
 @property (readwrite) NSInteger type;
+@property (readwrite) NSInteger databaseType;
 @property (readwrite, copy) NSString *name;
 @property (readwrite, copy) NSString *host;
 @property (readwrite, copy) NSString *user;
@@ -289,11 +294,18 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
 
 #pragma mark - SPConnectionHandler
 
+- (void)setDatabaseTypeToPostgreSQL:(BOOL)usePostgreSQL {
+    [self setDatabaseType:(usePostgreSQL ? 1 : 0)];
+}
+
 - (void)initiateMySQLConnection;
 - (void)initiateMySQLConnectionInBackground;
+- (void)initiatePostgreSQLConnection;
+- (void)initiatePostgreSQLConnectionInBackground;
 - (void)initiateSSHTunnelConnection;
 
 - (void)mySQLConnectionEstablished;
+- (void)postgreSQLConnectionEstablished;
 - (void)sshTunnelCallback:(SPSSHTunnel *)theTunnel;
 
 - (void)addConnectionToDocument;
