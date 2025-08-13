@@ -34,6 +34,7 @@
 #import "SPReachability.h"
 
 #import <SPMySQL/SPMySQL.h>
+#import "SPPostgreSQL.h"
 
 @class SPDatabaseDocument, 
 	   SPFavoritesController, 
@@ -41,6 +42,7 @@
 	   SPTreeNode,
 	   SPFavoritesOutlineView,
        SPMySQLConnection,
+       SPPostgreSQLConnection,
 	   SPSplitView,
 	   SPKeychain,
 	   SPFavoriteNode,
@@ -54,10 +56,11 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
     SPConnectionTimeZoneModeUseFixedTZ
 };
 
-@interface SPConnectionController : NSViewController <SPMySQLConnectionDelegate, NSOpenSavePanelDelegate, SPFavoritesImportProtocol, SPFavoritesExportProtocol, NSSplitViewDelegate>
+@interface SPConnectionController : NSViewController <SPMySQLConnectionDelegate, SPPostgreSQLConnectionDelegate, NSOpenSavePanelDelegate, SPFavoritesImportProtocol, SPFavoritesExportProtocol, NSSplitViewDelegate>
 {	
 	__weak SPDatabaseDocument *dbDocument;
 	SPMySQLConnection *mySQLConnection;
+	SPPostgreSQLConnection *postgreSQLConnection;
 
 	SPKeychain *keychain;
 	NSSplitView *databaseConnectionView;
@@ -291,9 +294,12 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
 
 - (void)initiateMySQLConnection;
 - (void)initiateMySQLConnectionInBackground;
+- (void)initiatePostgreSQLConnection;
+- (void)initiatePostgreSQLConnectionInBackground;
 - (void)initiateSSHTunnelConnection;
 
 - (void)mySQLConnectionEstablished;
+- (void)postgreSQLConnectionEstablished;
 - (void)sshTunnelCallback:(SPSSHTunnel *)theTunnel;
 
 - (void)addConnectionToDocument;
