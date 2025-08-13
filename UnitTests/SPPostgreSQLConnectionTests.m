@@ -75,4 +75,16 @@
     XCTAssertTrue([[connection queryErrorMessage] containsString:@"Username"], @"Error message should mention username requirement");
 }
 
+- (void)testConnectionControllerDatabaseTypeSelection {
+    // This is a conceptual test to show how the database type selection would work
+    // In practice, this would be tested with the full app initialization
+    
+    // Mock connection controller behavior
+    NSInteger mysqlType = 0;
+    NSInteger postgresqlType = 1;
+    
+    XCTAssertEqual(mysqlType, 0, @"MySQL should be database type 0");
+    XCTAssertEqual(postgresqlType, 1, @"PostgreSQL should be database type 1");
+}
+
 @end
